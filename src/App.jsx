@@ -13,75 +13,110 @@ const geocodeAddress = async (address) => {
   return { lat, lon: lng };
 };
 
-// 🗺️ Fetch zoning data from Hamilton ArcGIS
+// 🗺️ Zoning Area = Fallback for Lot Size
 const fetchZoningData = async (lat, lon) => {
-  const url = `https://services.arcgis.com/rYz782eMbySr2srL/arcgis/rest/services/Zoning_By_law_Boundary/FeatureServer/1/query?f=json&geometry=${lon},${lat}&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects&inSR=4326&outSR=4326&outFields=*&returnGeometry=false`;
+  const url = `https://services.arcgis.com/rYz782eMbySr2srL/arcgis/rest/services/Zoning_By_law_Boundary/FeatureServer/1/query?f=geojson&geometry=${lon},${lat}&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects&outFields=*&returnGeometry=true`;
 
+  const res = await fetch(url);
+  const data = await res.json();
+  if (!data.features || data.features.length === 0) return null;
+
+  const zone = data.features[0];
+  const lotSize = zone.properties.Shape__Area || 300; // fallback
+  return { zoning: zone.properties, lotSizeSqM: lotSize / 1.0 }; // square meters assumed
+};
+
+// 🧱 Building Footprint Estimate (via OSM)
+const fetchBuildingArea = async (lat, lon) => {
+  const overpassQuery = `
+    [out:json];
+    way(around:50,${lat},${lon})["building"];
+    out body;
+    >;
+    out skel qt;
+  `;
+  const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(overpassQuery)}`;
   try {
     const res = await fetch(url);
     const data = await res.json();
-
-    if (!data.features || data.features.length === 0) {
-      console.warn("No zoning data returned for that location.");
-      return null;
-    }
-
-    const attributes = data.features[0].attributes;
-    console.log("Zoning attributes:", JSON.stringify(attributes, null, 2));
-    return attributes;
-  } catch (error) {
-    console.error("Zoning fetch failed:", error);
-    return null;
+    const area = data.elements.length > 0 ? data.elements.length * 40 : 0; // rough area estimate
+    return area;
+  } catch {
+    return 0;
   }
 };
 
-// 🔌 Utilities logic with fallback enabled
-const fetchUtilitiesData = async (lat, lon) => {
-  const sewerURL = `https://services.arcgis.com/rYz782eMbySr2srL/arcgis/rest/services/Sanitation_Sewer_Wastewater_Catchment_Areas/FeatureServer/15/query?f=geojson&geometry=${lon},${lat}&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects&inSR=4326&outSR=4326`;
-
+// 🚗 Road Access via Edge Dataset
+const fetchAccessInfo = async (lat, lon) => {
+  const url = `https://services.arcgis.com/rYz782eMbySr2srL/arcgis/rest/services/Road_Edge/FeatureServer/3/query?f=geojson&geometry=${lon},${lat}&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects`;
   try {
-    const response = await fetch(sewerURL);
-    const data = await response.json();
-    const intersects = data.features.length > 0;
+    const res = await fetch(url);
+    const data = await res.json();
+    return data.features.length > 0;
+  } catch {
+    return false;
+  }
+};
 
-    // Fallback: assume sewer/water are available if no data
+// 💡 Streetlight Proximity
+const fetchStreetlightProximity = async (lat, lon) => {
+  const url = `https://services.arcgis.com/rYz782eMbySr2srL/arcgis/rest/services/Street_Light/FeatureServer/3/query?f=geojson&geometry=${lon},${lat}&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects`;
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    return data.features.length > 0;
+  } catch {
+    return false;
+  }
+};
+
+// 🔌 Utilities Logic (fallback still enabled)
+const fetchUtilitiesData = async (lat, lon, streetlightNearby) => {
+  try {
+    const sewerAvailable = true; // assume available for now
+    const waterAvailable = true;
     return {
-      sewer: intersects || true,
-      water: intersects || true,
-      hydro: false,
+      sewer: sewerAvailable,
+      water: waterAvailable,
+      hydro: streetlightNearby || false,
     };
-  } catch (error) {
-    console.warn("Utility check failed or data incomplete, assuming available.");
+  } catch {
     return {
       sewer: true,
       water: true,
-      hydro: false,
+      hydro: streetlightNearby || false,
     };
   }
 };
 
-const checkADUFeasibility = ({ zoning, utilities }) => {
-  if (!zoning) return { allowed: false, reason: "No zoning data found" };
-  const zoneField = (zoning.ZONING_CODE && zoning.ZONING_DESC)
+const checkADUFeasibility = ({ zoning, lotSizeSqM, buildingArea, access, utilities }) => {
+  if (!zoning) return { allowed: false, reason: "No zoning data" };
+
+  const zoneField = zoning.ZONING_CODE && zoning.ZONING_DESC
     ? `${zoning.ZONING_CODE} — ${zoning.ZONING_DESC}`
     : "Unknown";
 
   const allowedZones = ["R1", "R2", "R3", "C", "Mixed Use", "D"];
-  const isZoned = allowedZones.some(z => zoneField.includes(z));
+  const isZoned = allowedZones.some((z) => zoneField.includes(z));
   const allUtilities = utilities.sewer && utilities.water;
 
+  const buildableArea = Math.max(lotSizeSqM - buildingArea, 0);
+  const maxADUSize = Math.min(buildableArea * 0.15, 65); // 15% lot coverage rule, capped at 65
+
   return {
-    allowed: isZoned && allUtilities,
+    allowed: isZoned && allUtilities && access,
     zoningCategory: zoneField,
     requiredSetbacks: { rear: 1.5, side: 0.6 },
-    maxSize: 65,
+    maxSize: Math.round(maxADUSize),
     reason: isZoned
-      ? allUtilities ? "Eligible" : "Missing utility connection"
+      ? allUtilities
+        ? access ? "Eligible" : "No legal access"
+        : "Missing utility connection"
       : "Zoning restrictions",
   };
 };
 
-// 🧠 Simulated extra logic
+// 🌱 Other Layers
 const fetchHeritageStatus = async () => true;
 const fetchSoilType = async () => "Loam";
 const fetchSlopeRisk = async () => false;
@@ -90,9 +125,19 @@ const fetchGreenbeltStatus = async () => false;
 // 📊 Report Generator
 const generateFeasibilityReport = async (address) => {
   const { lat, lon } = await geocodeAddress(address);
-  const zoning = await fetchZoningData(lat, lon);
-  const utilities = await fetchUtilitiesData(lat, lon);
-  const aduRules = checkADUFeasibility({ zoning, utilities });
+  const { zoning, lotSizeSqM } = await fetchZoningData(lat, lon);
+  const buildingArea = await fetchBuildingArea(lat, lon);
+  const accessAvailable = await fetchAccessInfo(lat, lon);
+  const nearStreetlight = await fetchStreetlightProximity(lat, lon);
+  const utilities = await fetchUtilitiesData(lat, lon, nearStreetlight);
+
+  const aduRules = checkADUFeasibility({
+    zoning,
+    lotSizeSqM,
+    buildingArea,
+    access: accessAvailable,
+    utilities,
+  });
 
   const heritageFlag = await fetchHeritageStatus();
   const soilType = await fetchSoilType();
@@ -101,9 +146,8 @@ const generateFeasibilityReport = async (address) => {
 
   return {
     address,
-    zoning,
-    utilities,
     aduRules,
+    utilities,
     heritageFlag,
     soilType,
     slopeWarning,
@@ -112,7 +156,7 @@ const generateFeasibilityReport = async (address) => {
   };
 };
 
-// 📋 Report Preview
+// 🧾 Report Preview (simplified output)
 const ReportPreview = ({ report }) => {
   if (!report) return null;
   return (
@@ -123,6 +167,8 @@ const ReportPreview = ({ report }) => {
       <p><strong>Utilities:</strong> Sewer - {report.utilities.sewer ? "Yes" : "No"}, Water - {report.utilities.water ? "Yes" : "No"}</p>
       <p><strong>ADU Permitted:</strong> {report.aduRules.allowed ? "Yes" : "No"}</p>
       <p><strong>Reason:</strong> {report.aduRules.reason}</p>
+      <p><strong>Max ADU Size:</strong> {report.aduRules.maxSize} m²</p>
+      <p><strong>Setbacks:</strong> Rear - {report.aduRules.requiredSetbacks.rear}m, Side - {report.aduRules.requiredSetbacks.side}m</p>
       <p><strong>Soil Type:</strong> {report.soilType}</p>
       <p><strong>Slope Risk:</strong> {report.slopeWarning ? "High" : "Low"}</p>
       <p><strong>Greenbelt:</strong> {report.greenbeltFlag ? "Yes" : "No"}</p>
@@ -132,7 +178,7 @@ const ReportPreview = ({ report }) => {
   );
 };
 
-// 🧑‍💻 Address Input
+// 📥 Address Input
 const AddressInput = ({ value, onChange }) => (
   <div>
     <label htmlFor="address">Enter Property Address</label>
