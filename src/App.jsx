@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 
-// 🔍 1. Geocode using OpenCage
+// 📍 Geocode with OpenCage
 const geocodeAddress = async (address) => {
   const apiKey = "352a0e8f66fd420eb176702efb619b5f";
   const encoded = encodeURIComponent(address);
@@ -13,22 +13,7 @@ const geocodeAddress = async (address) => {
   return { lat, lon: lng };
 };
 
-// 🏡 Address Input Component
-const AddressInput = ({ value, onChange }) => (
-  <div>
-    <label htmlFor="address">Enter Property Address</label>
-    <input
-      id="address"
-      type="text"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      placeholder="123 Main St, Hamilton, ON"
-      style={{ width: "100%", padding: "8px", marginTop: "4px" }}
-    />
-  </div>
-);
-
-// 🌐 Zoning & Utility Data
+// 🗺️ Fetch zoning data from Hamilton ArcGIS
 const fetchZoningData = async (lat, lon) => {
   const url = `https://services.arcgis.com/rYz782eMbySr2srL/arcgis/rest/services/Zoning_By_law_Boundary/FeatureServer/1/query?f=json&geometry=${lon},${lat}&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects&inSR=4326&outSR=4326&outFields=*&returnGeometry=false`;
 
@@ -41,15 +26,14 @@ const fetchZoningData = async (lat, lon) => {
       return null;
     }
 
-    console.log("Zoning attributes:", JSON.stringify(data.features[0].attributes, null, 2));
-
-    return data.features[0].attributes;
+    const attributes = data.features[0].attributes;
+    console.log("Zoning attributes:", JSON.stringify(attributes, null, 2));
+    return attributes;
   } catch (error) {
     console.error("Zoning fetch failed:", error);
     return null;
   }
 };
-
 
 const fetchUtilitiesData = async () => {
   return {
@@ -61,14 +45,21 @@ const fetchUtilitiesData = async () => {
 
 const checkADUFeasibility = ({ zoning, utilities }) => {
   if (!zoning) return { allowed: false, reason: "No zoning data found" };
-  const category = zoning.ZONE_CATEGORY || zoning.Zone_Type || "Unknown";
+  const zoneField =
+    zoning.ZONE_CATEGORY ||
+    zoning.ZONE_TYPE ||
+    zoning.Zone ||
+    zoning.LABEL ||
+    zoning.DESCRIPTION ||
+    "Unknown";
+
   const allowedZones = ["R1", "R2", "R3", "C", "Mixed Use"];
-  const isZoned = allowedZones.some(z => category.includes(z));
+  const isZoned = allowedZones.some(z => zoneField.includes(z));
   const allUtilities = utilities.sewer && utilities.water;
 
   return {
     allowed: isZoned && allUtilities,
-    zoningCategory: category,
+    zoningCategory: zoneField,
     requiredSetbacks: { rear: 1.5, side: 0.6 },
     maxSize: 65,
     reason: isZoned
@@ -77,16 +68,16 @@ const checkADUFeasibility = ({ zoning, utilities }) => {
   };
 };
 
-// 🧠 Constraints + Grant Logic
-const fetchHeritageStatus = async () => true; // Simulated
+// 🧠 Simulated extra logic
+const fetchHeritageStatus = async () => true;
 const fetchSoilType = async () => "Loam";
 const fetchSlopeRisk = async () => false;
 const fetchGreenbeltStatus = async () => false;
 const fetchIncentiveEligibility = (heritageFlag) => !heritageFlag;
 
-// 📊 Main Logic Engine
+// 📊 Report Generator
 const generateFeasibilityReport = async (address) => {
-  const lat = 43.2571, lon = -79.8656; // 45 King William St, Hamilton (hardcoded)
+  const { lat, lon } = await geocodeAddress(address);
   const zoning = await fetchZoningData(lat, lon);
   const utilities = await fetchUtilitiesData();
   const aduRules = checkADUFeasibility({ zoning, utilities });
@@ -118,14 +109,7 @@ const ReportPreview = ({ report }) => {
     <div style={{ marginTop: "2rem", padding: "1rem", border: "1px solid #ccc", borderRadius: "8px", backgroundColor: "#f9f9f9" }}>
       <h2>Feasibility Report</h2>
       <p><strong>Address:</strong> {report.address}</p>
-      <p><strong>Zoning:</strong> {
-  report.zoning?.ZONE_CATEGORY ||
-  report.zoning?.ZONE_TYPE ||
-  report.zoning?.Zone ||
-  report.zoning?.LABEL ||
-  "Unknown"
-}</p>
-
+      <p><strong>Zoning:</strong> {report.aduRules.zoningCategory}</p>
       <p><strong>Utilities:</strong> Sewer - {report.utilities.sewer ? "Yes" : "No"}, Water - {report.utilities.water ? "Yes" : "No"}</p>
       <p><strong>ADU Permitted:</strong> {report.aduRules.allowed ? "Yes" : "No"}</p>
       <p><strong>Reason:</strong> {report.aduRules.reason}</p>
@@ -144,7 +128,22 @@ const ReportPreview = ({ report }) => {
   );
 };
 
-// 🚀 App Shell
+// 🧑‍💻 Address Input
+const AddressInput = ({ value, onChange }) => (
+  <div>
+    <label htmlFor="address">Enter Property Address</label>
+    <input
+      id="address"
+      type="text"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder="123 Main St, Hamilton, ON"
+      style={{ width: "100%", padding: "8px", marginTop: "4px" }}
+    />
+  </div>
+);
+
+// 🚀 Main App
 const App = () => {
   const [inputAddress, setInputAddress] = useState("");
   const [report, setReport] = useState(null);
