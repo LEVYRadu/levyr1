@@ -41,7 +41,8 @@ const fetchZoningData = async (lat, lon) => {
       return null;
     }
 
-    console.log("Zoning attributes:", data.features[0].attributes);
+    console.log("Zoning attributes:", JSON.stringify(data.features[0].attributes, null, 2));
+
     return data.features[0].attributes;
   } catch (error) {
     console.error("Zoning fetch failed:", error);
