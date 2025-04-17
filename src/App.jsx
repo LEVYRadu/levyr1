@@ -1,5 +1,18 @@
 import React, { useState } from "react";
 
+// 🔍 1. Geocode using OpenCage
+const geocodeAddress = async (address) => {
+  const apiKey = "352a0e8f66fd420eb176702efb619b5f";
+  const encoded = encodeURIComponent(address);
+  const url = `https://api.opencagedata.com/geocode/v1/json?q=${encoded}&key=${apiKey}&countrycode=ca&limit=1`;
+  const res = await fetch(url);
+  const data = await res.json();
+
+  if (data.results.length === 0) throw new Error("Address not found");
+  const { lat, lng } = data.results[0].geometry;
+  return { lat, lon: lng };
+};
+
 // 🏡 Address Input Component
 const AddressInput = ({ value, onChange }) => (
   <div>
@@ -15,7 +28,7 @@ const AddressInput = ({ value, onChange }) => (
   </div>
 );
 
-// 🌐 Data Fetching Functions
+// 🌐 Zoning & Utility Data
 const fetchZoningData = async (lat, lon) => {
   const url = `https://services.arcgis.com/rYz782eMbySr2srL/arcgis/rest/services/Zoning_By_law_Boundary/FeatureServer/1/query?f=json&where=1%3D1&outFields=*&geometry=${lon},${lat}&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects&inSR=4326&outSR=4326`;
   const res = await fetch(url);
@@ -33,7 +46,6 @@ const fetchUtilitiesData = async () => {
 
 const checkADUFeasibility = ({ zoning, utilities }) => {
   if (!zoning) return { allowed: false, reason: "No zoning data found" };
-
   const category = zoning.ZONE_CATEGORY || zoning.Zone_Type || "Unknown";
   const allowedZones = ["R1", "R2", "R3", "C", "Mixed Use"];
   const isZoned = allowedZones.some(z => category.includes(z));
@@ -45,24 +57,21 @@ const checkADUFeasibility = ({ zoning, utilities }) => {
     requiredSetbacks: { rear: 1.5, side: 0.6 },
     maxSize: 65,
     reason: isZoned
-      ? allUtilities
-        ? "Eligible"
-        : "Missing utility connection"
+      ? allUtilities ? "Eligible" : "Missing utility connection"
       : "Zoning restrictions",
   };
 };
 
-// 🧠 Constraint + Incentive Logic
+// 🧠 Constraints + Grant Logic
 const fetchHeritageStatus = async () => true; // Simulated
 const fetchSoilType = async () => "Loam";
 const fetchSlopeRisk = async () => false;
 const fetchGreenbeltStatus = async () => false;
 const fetchIncentiveEligibility = (heritageFlag) => !heritageFlag;
 
-// 📊 Generate Report
+// 📊 Main Logic Engine
 const generateFeasibilityReport = async (address) => {
-  const lat = 43.2557, lon = -79.8711; // Downtown Hamilton
-
+  const { lat, lon } = await geocodeAddress(address);
   const zoning = await fetchZoningData(lat, lon);
   const utilities = await fetchUtilitiesData();
   const aduRules = checkADUFeasibility({ zoning, utilities });
@@ -87,7 +96,7 @@ const generateFeasibilityReport = async (address) => {
   };
 };
 
-// 📋 Report Display
+// 📋 Report Preview
 const ReportPreview = ({ report }) => {
   if (!report) return null;
   return (
@@ -98,32 +107,33 @@ const ReportPreview = ({ report }) => {
       <p><strong>Utilities:</strong> Sewer - {report.utilities.sewer ? "Yes" : "No"}, Water - {report.utilities.water ? "Yes" : "No"}</p>
       <p><strong>ADU Permitted:</strong> {report.aduRules.allowed ? "Yes" : "No"}</p>
       <p><strong>Reason:</strong> {report.aduRules.reason}</p>
-
       <p><strong>Soil Type:</strong> {report.soilType}</p>
       <p><strong>Slope Risk:</strong> {report.slopeWarning ? "High" : "Low"}</p>
       <p><strong>Greenbelt:</strong> {report.greenbeltFlag ? "Yes" : "No"}</p>
       <p><strong>Heritage Status:</strong> {report.heritageFlag ? "Yes" : "No"}</p>
-
       {report.incentiveEligible && (
         <div style={{ marginTop: "1rem", background: "#e0ffe0", padding: "1rem", borderRadius: "8px" }}>
           <strong>💸 ADU Incentive:</strong><br />
           Eligible for Hamilton’s $25K forgivable loan + rebates.
         </div>
       )}
-
       <p style={{ marginTop: "1rem" }}>{report.summary}</p>
     </div>
   );
 };
 
-// ⚙️ App Root Component
+// 🚀 App Shell
 const App = () => {
   const [inputAddress, setInputAddress] = useState("");
   const [report, setReport] = useState(null);
 
   const handleRun = async () => {
-    const result = await generateFeasibilityReport(inputAddress || "123 Main St, Hamilton");
-    setReport(result);
+    try {
+      const result = await generateFeasibilityReport(inputAddress || "123 Main St, Hamilton");
+      setReport(result);
+    } catch (err) {
+      alert("Could not locate that address. Try another.");
+    }
   };
 
   return (
