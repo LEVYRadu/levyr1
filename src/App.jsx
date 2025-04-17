@@ -69,7 +69,7 @@ const fetchHeritageStatus = async () => true;
 const fetchSoilType = async () => "Loam";
 const fetchSlopeRisk = async () => false;
 const fetchGreenbeltStatus = async () => false;
-const fetchIncentiveEligibility = (heritageFlag) => !heritageFlag;
+const fetchIncentiveEligibility = (heritageFlag) => !heritageFlag; // logic kept but unused
 
 // 📊 Report Generator
 const generateFeasibilityReport = async (address) => {
@@ -82,7 +82,7 @@ const generateFeasibilityReport = async (address) => {
   const soilType = await fetchSoilType();
   const slopeWarning = await fetchSlopeRisk();
   const greenbeltFlag = await fetchGreenbeltStatus();
-  const incentiveEligible = fetchIncentiveEligibility(heritageFlag);
+  const incentiveEligible = fetchIncentiveEligibility(heritageFlag); // not shown, logic preserved
 
   return {
     address,
@@ -98,7 +98,7 @@ const generateFeasibilityReport = async (address) => {
   };
 };
 
-// 📋 Report Preview
+// 📋 Report Preview (no incentives shown)
 const ReportPreview = ({ report }) => {
   if (!report) return null;
   return (
@@ -113,12 +113,6 @@ const ReportPreview = ({ report }) => {
       <p><strong>Slope Risk:</strong> {report.slopeWarning ? "High" : "Low"}</p>
       <p><strong>Greenbelt:</strong> {report.greenbeltFlag ? "Yes" : "No"}</p>
       <p><strong>Heritage Status:</strong> {report.heritageFlag ? "Yes" : "No"}</p>
-      {report.incentiveEligible && (
-        <div style={{ marginTop: "1rem", background: "#e0ffe0", padding: "1rem", borderRadius: "8px" }}>
-          <strong>💸 ADU Incentive:</strong><br />
-          Eligible for Hamilton’s $25K forgivable loan + rebates.
-        </div>
-      )}
       <p style={{ marginTop: "1rem" }}>{report.summary}</p>
     </div>
   );
