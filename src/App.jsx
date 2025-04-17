@@ -35,12 +35,28 @@ const fetchZoningData = async (lat, lon) => {
   }
 };
 
-const fetchUtilitiesData = async () => {
-  return {
-    sewer: true,
-    water: true,
-    hydro: true,
-  };
+// 🔌 Real utilities logic
+const fetchUtilitiesData = async (lat, lon) => {
+  const sewerURL = `https://services.arcgis.com/rYz782eMbySr2srL/arcgis/rest/services/Sanitation_Sewer_Wastewater_Catchment_Areas/FeatureServer/15/query?f=geojson&geometry=${lon},${lat}&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects&inSR=4326&outSR=4326`;
+
+  try {
+    const response = await fetch(sewerURL);
+    const data = await response.json();
+    const intersects = data.features.length > 0;
+
+    return {
+      sewer: intersects,
+      water: intersects, // Assuming same catchment covers both for now
+      hydro: false,      // Placeholder until hydro data is added
+    };
+  } catch (error) {
+    console.error("Utility fetch failed:", error);
+    return {
+      sewer: false,
+      water: false,
+      hydro: false,
+    };
+  }
 };
 
 const checkADUFeasibility = ({ zoning, utilities }) => {
@@ -69,20 +85,18 @@ const fetchHeritageStatus = async () => true;
 const fetchSoilType = async () => "Loam";
 const fetchSlopeRisk = async () => false;
 const fetchGreenbeltStatus = async () => false;
-const fetchIncentiveEligibility = (heritageFlag) => !heritageFlag; // logic kept but unused
 
 // 📊 Report Generator
 const generateFeasibilityReport = async (address) => {
   const { lat, lon } = await geocodeAddress(address);
   const zoning = await fetchZoningData(lat, lon);
-  const utilities = await fetchUtilitiesData();
+  const utilities = await fetchUtilitiesData(lat, lon);
   const aduRules = checkADUFeasibility({ zoning, utilities });
 
   const heritageFlag = await fetchHeritageStatus();
   const soilType = await fetchSoilType();
   const slopeWarning = await fetchSlopeRisk();
   const greenbeltFlag = await fetchGreenbeltStatus();
-  const incentiveEligible = fetchIncentiveEligibility(heritageFlag); // not shown, logic preserved
 
   return {
     address,
@@ -93,12 +107,11 @@ const generateFeasibilityReport = async (address) => {
     soilType,
     slopeWarning,
     greenbeltFlag,
-    incentiveEligible,
     summary: `Feasibility complete for ${address}.`,
   };
 };
 
-// 📋 Report Preview (no incentives shown)
+// 📋 Report Preview
 const ReportPreview = ({ report }) => {
   if (!report) return null;
   return (
