@@ -103,7 +103,14 @@ const ReportPreview = ({ report }) => {
     <div style={{ marginTop: "2rem", padding: "1rem", border: "1px solid #ccc", borderRadius: "8px", backgroundColor: "#f9f9f9" }}>
       <h2>Feasibility Report</h2>
       <p><strong>Address:</strong> {report.address}</p>
-      <p><strong>Zoning:</strong> {report.zoning?.ZONE_CATEGORY || "Unknown"}</p>
+      <p><strong>Zoning:</strong> {
+  report.zoning?.ZONE_CATEGORY ||
+  report.zoning?.ZONE_TYPE ||
+  report.zoning?.Zone ||
+  report.zoning?.LABEL ||
+  "Unknown"
+}</p>
+
       <p><strong>Utilities:</strong> Sewer - {report.utilities.sewer ? "Yes" : "No"}, Water - {report.utilities.water ? "Yes" : "No"}</p>
       <p><strong>ADU Permitted:</strong> {report.aduRules.allowed ? "Yes" : "No"}</p>
       <p><strong>Reason:</strong> {report.aduRules.reason}</p>
