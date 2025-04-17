@@ -30,11 +30,25 @@ const AddressInput = ({ value, onChange }) => (
 
 // 🌐 Zoning & Utility Data
 const fetchZoningData = async (lat, lon) => {
-  const url = `https://services.arcgis.com/rYz782eMbySr2srL/arcgis/rest/services/Zoning_By_law_Boundary/FeatureServer/1/query?f=json&where=1%3D1&outFields=*&geometry=${lon},${lat}&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects&inSR=4326&outSR=4326`;
-  const res = await fetch(url);
-  const data = await res.json();
-  return data.features?.[0]?.attributes;
+  const url = `https://services.arcgis.com/rYz782eMbySr2srL/arcgis/rest/services/Zoning_By_law_Boundary/FeatureServer/1/query?f=json&geometry=${lon},${lat}&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects&inSR=4326&outSR=4326&outFields=*&returnGeometry=false`;
+
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (!data.features || data.features.length === 0) {
+      console.warn("No zoning data returned for that location.");
+      return null;
+    }
+
+    console.log("Zoning attributes:", data.features[0].attributes);
+    return data.features[0].attributes;
+  } catch (error) {
+    console.error("Zoning fetch failed:", error);
+    return null;
+  }
 };
+
 
 const fetchUtilitiesData = async () => {
   return {
