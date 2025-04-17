@@ -45,15 +45,11 @@ const fetchUtilitiesData = async () => {
 
 const checkADUFeasibility = ({ zoning, utilities }) => {
   if (!zoning) return { allowed: false, reason: "No zoning data found" };
-  const zoneField =
-    zoning.ZONE_CATEGORY ||
-    zoning.ZONE_TYPE ||
-    zoning.Zone ||
-    zoning.LABEL ||
-    zoning.DESCRIPTION ||
-    "Unknown";
+  const zoneField = (zoning.ZONING_CODE && zoning.ZONING_DESC)
+    ? `${zoning.ZONING_CODE} — ${zoning.ZONING_DESC}`
+    : "Unknown";
 
-  const allowedZones = ["R1", "R2", "R3", "C", "Mixed Use"];
+  const allowedZones = ["R1", "R2", "R3", "C", "Mixed Use", "D"];
   const isZoned = allowedZones.some(z => zoneField.includes(z));
   const allUtilities = utilities.sewer && utilities.water;
 
