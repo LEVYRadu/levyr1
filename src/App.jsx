@@ -7,26 +7,23 @@ const geocodeAddress = async (address) => {
   const url = `https://api.opencagedata.com/geocode/v1/json?q=${encoded}&key=${apiKey}&countrycode=ca&limit=1`;
   const res = await fetch(url);
   const data = await res.json();
-
   if (data.results.length === 0) throw new Error("Address not found");
   const { lat, lng } = data.results[0].geometry;
   return { lat, lon: lng };
 };
 
-// 🗺️ Zoning Area = Fallback for Lot Size
+// 🗺️ Zoning Area = Lot Size Estimate
 const fetchZoningData = async (lat, lon) => {
   const url = `https://services.arcgis.com/rYz782eMbySr2srL/arcgis/rest/services/Zoning_By_law_Boundary/FeatureServer/1/query?f=geojson&geometry=${lon},${lat}&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects&outFields=*&returnGeometry=true`;
-
   const res = await fetch(url);
   const data = await res.json();
   if (!data.features || data.features.length === 0) return null;
-
   const zone = data.features[0];
-  const lotSize = zone.properties.Shape__Area || 300; // fallback
-  return { zoning: zone.properties, lotSizeSqM: lotSize / 1.0 }; // square meters assumed
+  const lotSize = zone.properties.Shape__Area || 300;
+  return { zoning: zone.properties, lotSizeSqM: lotSize };
 };
 
-// 🧱 Building Footprint Estimate (via OSM)
+// 🧱 Building Footprint Estimate
 const fetchBuildingArea = async (lat, lon) => {
   const overpassQuery = `
     [out:json];
@@ -39,16 +36,17 @@ const fetchBuildingArea = async (lat, lon) => {
   try {
     const res = await fetch(url);
     const data = await res.json();
-    const area = data.elements.length > 0 ? data.elements.length * 40 : 0; // rough area estimate
+    const area = data.elements.length > 0 ? data.elements.length * 40 : 0;
     return area;
   } catch {
     return 0;
   }
 };
 
-// 🚗 Road Access via Edge Dataset
+// 🚗 Updated Access Check (Proximity to Road Edge)
 const fetchAccessInfo = async (lat, lon) => {
-  const url = `https://services.arcgis.com/rYz782eMbySr2srL/arcgis/rest/services/Road_Edge/FeatureServer/3/query?f=geojson&geometry=${lon},${lat}&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects`;
+  const buffer = 50; // meters
+  const url = `https://services.arcgis.com/rYz782eMbySr2srL/arcgis/rest/services/Road_Edge/FeatureServer/3/query?f=geojson&geometry=${lon},${lat}&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects&distance=${buffer}&units=esriSRUnit_Meter`;
   try {
     const res = await fetch(url);
     const data = await res.json();
@@ -60,7 +58,7 @@ const fetchAccessInfo = async (lat, lon) => {
 
 // 💡 Streetlight Proximity
 const fetchStreetlightProximity = async (lat, lon) => {
-  const url = `https://services.arcgis.com/rYz782eMbySr2srL/arcgis/rest/services/Street_Light/FeatureServer/3/query?f=geojson&geometry=${lon},${lat}&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects`;
+  const url = `https://services.arcgis.com/rYz782eMbySr2srL/arcgis/rest/services/Street_Light/FeatureServer/3/query?f=geojson&geometry=${lon},${lat}&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects&distance=50&units=esriSRUnit_Meter`;
   try {
     const res = await fetch(url);
     const data = await res.json();
@@ -70,28 +68,17 @@ const fetchStreetlightProximity = async (lat, lon) => {
   }
 };
 
-// 🔌 Utilities Logic (fallback still enabled)
-const fetchUtilitiesData = async (lat, lon, streetlightNearby) => {
-  try {
-    const sewerAvailable = true; // assume available for now
-    const waterAvailable = true;
-    return {
-      sewer: sewerAvailable,
-      water: waterAvailable,
-      hydro: streetlightNearby || false,
-    };
-  } catch {
-    return {
-      sewer: true,
-      water: true,
-      hydro: streetlightNearby || false,
-    };
-  }
+// 🔌 Utilities with fallback + streetlight confidence
+const fetchUtilitiesData = async (lat, lon, nearStreetlight) => {
+  return {
+    sewer: true,
+    water: true,
+    hydro: nearStreetlight || false,
+  };
 };
 
 const checkADUFeasibility = ({ zoning, lotSizeSqM, buildingArea, access, utilities }) => {
   if (!zoning) return { allowed: false, reason: "No zoning data" };
-
   const zoneField = zoning.ZONING_CODE && zoning.ZONING_DESC
     ? `${zoning.ZONING_CODE} — ${zoning.ZONING_DESC}`
     : "Unknown";
@@ -101,7 +88,7 @@ const checkADUFeasibility = ({ zoning, lotSizeSqM, buildingArea, access, utiliti
   const allUtilities = utilities.sewer && utilities.water;
 
   const buildableArea = Math.max(lotSizeSqM - buildingArea, 0);
-  const maxADUSize = Math.min(buildableArea * 0.15, 65); // 15% lot coverage rule, capped at 65
+  const maxADUSize = Math.min(buildableArea * 0.15, 65);
 
   return {
     allowed: isZoned && allUtilities && access,
@@ -116,7 +103,7 @@ const checkADUFeasibility = ({ zoning, lotSizeSqM, buildingArea, access, utiliti
   };
 };
 
-// 🌱 Other Layers
+// 🌱 Simulated Environmental Layers
 const fetchHeritageStatus = async () => true;
 const fetchSoilType = async () => "Loam";
 const fetchSlopeRisk = async () => false;
@@ -127,8 +114,8 @@ const generateFeasibilityReport = async (address) => {
   const { lat, lon } = await geocodeAddress(address);
   const { zoning, lotSizeSqM } = await fetchZoningData(lat, lon);
   const buildingArea = await fetchBuildingArea(lat, lon);
-  const accessAvailable = await fetchAccessInfo(lat, lon);
   const nearStreetlight = await fetchStreetlightProximity(lat, lon);
+  const accessAvailable = await fetchAccessInfo(lat, lon) || nearStreetlight;
   const utilities = await fetchUtilitiesData(lat, lon, nearStreetlight);
 
   const aduRules = checkADUFeasibility({
@@ -156,7 +143,7 @@ const generateFeasibilityReport = async (address) => {
   };
 };
 
-// 🧾 Report Preview (simplified output)
+// 📋 Report
 const ReportPreview = ({ report }) => {
   if (!report) return null;
   return (
@@ -178,7 +165,7 @@ const ReportPreview = ({ report }) => {
   );
 };
 
-// 📥 Address Input
+// 📥 Input
 const AddressInput = ({ value, onChange }) => (
   <div>
     <label htmlFor="address">Enter Property Address</label>
@@ -193,7 +180,7 @@ const AddressInput = ({ value, onChange }) => (
   </div>
 );
 
-// 🚀 Main App
+// 🚀 App
 const App = () => {
   const [inputAddress, setInputAddress] = useState("");
   const [report, setReport] = useState(null);
