@@ -1,145 +1,51 @@
 import React, { useState } from "react";
 
-// 📍 Geocode with OpenCage
-const geocodeAddress = async (address) => {
-  const apiKey = "352a0e8f66fd420eb176702efb619b5f";
-  const encoded = encodeURIComponent(address);
-  const url = `https://api.opencagedata.com/geocode/v1/json?q=${encoded}&key=${apiKey}&countrycode=ca&limit=1`;
-  const res = await fetch(url);
-  const data = await res.json();
-  if (data.results.length === 0) throw new Error("Address not found");
-  const { lat, lng } = data.results[0].geometry;
-  return { lat, lon: lng };
-};
+// 🔁 Unit converters
+const ftToM = (feet) => feet * 0.3048;
+const ft2ToM2 = (ft2) => ft2 * 0.092903;
+const mToFt = (m) => m / 0.3048;
+const m2ToFt2 = (m2) => m2 / 0.092903;
 
-// 🗺️ Zoning Area = Lot Size Estimate
-const fetchZoningData = async (lat, lon) => {
-  const url = `https://services.arcgis.com/rYz782eMbySr2srL/arcgis/rest/services/Zoning_By_law_Boundary/FeatureServer/1/query?f=geojson&geometry=${lon},${lat}&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects&outFields=*&returnGeometry=true`;
-  const res = await fetch(url);
-  const data = await res.json();
-  if (!data.features || data.features.length === 0) return null;
-  const zone = data.features[0];
-  const lotSize = zone.properties.Shape__Area || 300;
-  return { zoning: zone.properties, lotSizeSqM: lotSize };
-};
+// 🧠 ADU Feasibility Engine (Metric logic)
+const checkADUFeasibility = ({
+  lotWidthFt,
+  lotDepthFt,
+  houseWidthFt,
+  houseDepthFt,
+}) => {
+  const lotWidthM = ftToM(lotWidthFt);
+  const lotDepthM = ftToM(lotDepthFt);
+  const houseWidthM = ftToM(houseWidthFt);
+  const houseDepthM = ftToM(houseDepthFt);
 
-// 🧱 Building Footprint Estimate
-const fetchBuildingArea = async (lat, lon) => {
-  const overpassQuery = `
-    [out:json];
-    way(around:50,${lat},${lon})["building"];
-    out body;
-    >;
-    out skel qt;
-  `;
-  const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(overpassQuery)}`;
-  try {
-    const res = await fetch(url);
-    const data = await res.json();
-    const area = data.elements.length > 0 ? data.elements.length * 40 : 0;
-    return area;
-  } catch {
-    return 0;
-  }
-};
+  const lotAreaM2 = lotWidthM * lotDepthM;
+  const houseAreaM2 = houseWidthM * houseDepthM;
 
-// 🚗 Updated Access Check (Proximity to Road Edge)
-const fetchAccessInfo = async (lat, lon) => {
-  const buffer = 50; // meters
-  const url = `https://services.arcgis.com/rYz782eMbySr2srL/arcgis/rest/services/Road_Edge/FeatureServer/3/query?f=geojson&geometry=${lon},${lat}&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects&distance=${buffer}&units=esriSRUnit_Meter`;
-  try {
-    const res = await fetch(url);
-    const data = await res.json();
-    return data.features.length > 0;
-  } catch {
-    return false;
-  }
-};
+  const rearYardDepthM = lotDepthM - houseDepthM;
+  const sideClearanceM = (lotWidthM - houseWidthM) / 2;
 
-// 💡 Streetlight Proximity
-const fetchStreetlightProximity = async (lat, lon) => {
-  const url = `https://services.arcgis.com/rYz782eMbySr2srL/arcgis/rest/services/Street_Light/FeatureServer/3/query?f=geojson&geometry=${lon},${lat}&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects&distance=50&units=esriSRUnit_Meter`;
-  try {
-    const res = await fetch(url);
-    const data = await res.json();
-    return data.features.length > 0;
-  } catch {
-    return false;
-  }
-};
+  const rearSetbackRequiredM = 1.5;
+  const sideSetbackRequiredM = 0.6;
 
-// 🔌 Utilities with fallback + streetlight confidence
-const fetchUtilitiesData = async (lat, lon, nearStreetlight) => {
-  return {
-    sewer: true,
-    water: true,
-    hydro: nearStreetlight || false,
-  };
-};
+  const hasRearYard = rearYardDepthM >= rearSetbackRequiredM;
+  const hasSideClearance = sideClearanceM >= sideSetbackRequiredM;
 
-const checkADUFeasibility = ({ zoning, lotSizeSqM, buildingArea, access, utilities }) => {
-  if (!zoning) return { allowed: false, reason: "No zoning data" };
-  const zoneField = zoning.ZONING_CODE && zoning.ZONING_DESC
-    ? `${zoning.ZONING_CODE} — ${zoning.ZONING_DESC}`
-    : "Unknown";
-
-  const allowedZones = ["R1", "R2", "R3", "C", "Mixed Use", "D"];
-  const isZoned = allowedZones.some((z) => zoneField.includes(z));
-  const allUtilities = utilities.sewer && utilities.water;
-
-  const buildableArea = Math.max(lotSizeSqM - buildingArea, 0);
-  const maxADUSize = Math.min(buildableArea * 0.15, 65);
+  const buildableAreaM2 = Math.max(lotAreaM2 - houseAreaM2, 0);
+  const maxADUM2 = Math.min(buildableAreaM2 * 0.15, 60); // Max 60m²
+  const maxADUFt2 = Math.round(m2ToFt2(maxADUM2));
 
   return {
-    allowed: isZoned && allUtilities && access,
-    zoningCategory: zoneField,
-    requiredSetbacks: { rear: 1.5, side: 0.6 },
-    maxSize: Math.round(maxADUSize),
-    reason: isZoned
-      ? allUtilities
-        ? access ? "Eligible" : "No legal access"
-        : "Missing utility connection"
-      : "Zoning restrictions",
-  };
-};
-
-// 🌱 Simulated Environmental Layers
-const fetchHeritageStatus = async () => true;
-const fetchSoilType = async () => "Loam";
-const fetchSlopeRisk = async () => false;
-const fetchGreenbeltStatus = async () => false;
-
-// 📊 Report Generator
-const generateFeasibilityReport = async (address) => {
-  const { lat, lon } = await geocodeAddress(address);
-  const { zoning, lotSizeSqM } = await fetchZoningData(lat, lon);
-  const buildingArea = await fetchBuildingArea(lat, lon);
-  const nearStreetlight = await fetchStreetlightProximity(lat, lon);
-  const accessAvailable = await fetchAccessInfo(lat, lon) || nearStreetlight;
-  const utilities = await fetchUtilitiesData(lat, lon, nearStreetlight);
-
-  const aduRules = checkADUFeasibility({
-    zoning,
-    lotSizeSqM,
-    buildingArea,
-    access: accessAvailable,
-    utilities,
-  });
-
-  const heritageFlag = await fetchHeritageStatus();
-  const soilType = await fetchSoilType();
-  const slopeWarning = await fetchSlopeRisk();
-  const greenbeltFlag = await fetchGreenbeltStatus();
-
-  return {
-    address,
-    aduRules,
-    utilities,
-    heritageFlag,
-    soilType,
-    slopeWarning,
-    greenbeltFlag,
-    summary: `Feasibility complete for ${address}.`,
+    allowed: hasRearYard && hasSideClearance,
+    reason: hasRearYard && hasSideClearance
+      ? "Eligible"
+      : !hasRearYard
+      ? "Insufficient rear yard depth"
+      : "Insufficient side clearance",
+    maxADUFt2,
+    rearYardDepthFt: Math.round(mToFt(rearYardDepthM)),
+    sideClearanceFt: Math.round(mToFt(sideClearanceM)),
+    lotAreaFt2: Math.round(m2ToFt2(lotAreaM2)),
+    houseAreaFt2: Math.round(m2ToFt2(houseAreaM2)),
   };
 };
 
@@ -150,54 +56,80 @@ const ReportPreview = ({ report }) => {
     <div style={{ marginTop: "2rem", padding: "1rem", border: "1px solid #ccc", borderRadius: "8px", backgroundColor: "#f9f9f9" }}>
       <h2>Feasibility Report</h2>
       <p><strong>Address:</strong> {report.address}</p>
-      <p><strong>Zoning:</strong> {report.aduRules.zoningCategory}</p>
-      <p><strong>Utilities:</strong> Sewer - {report.utilities.sewer ? "Yes" : "No"}, Water - {report.utilities.water ? "Yes" : "No"}</p>
-      <p><strong>ADU Permitted:</strong> {report.aduRules.allowed ? "Yes" : "No"}</p>
-      <p><strong>Reason:</strong> {report.aduRules.reason}</p>
-      <p><strong>Max ADU Size:</strong> {report.aduRules.maxSize} m²</p>
-      <p><strong>Setbacks:</strong> Rear - {report.aduRules.requiredSetbacks.rear}m, Side - {report.aduRules.requiredSetbacks.side}m</p>
-      <p><strong>Soil Type:</strong> {report.soilType}</p>
-      <p><strong>Slope Risk:</strong> {report.slopeWarning ? "High" : "Low"}</p>
-      <p><strong>Greenbelt:</strong> {report.greenbeltFlag ? "Yes" : "No"}</p>
-      <p><strong>Heritage Status:</strong> {report.heritageFlag ? "Yes" : "No"}</p>
+      <p><strong>Zoning:</strong> R2 (Assumed)</p>
+      <p><strong>Lot Area:</strong> {report.lotAreaFt2.toLocaleString()} ft²</p>
+      <p><strong>House Area:</strong> {report.houseAreaFt2.toLocaleString()} ft²</p>
+      <p><strong>Rear Yard Depth:</strong> {report.rearYardDepthFt} ft</p>
+      <p><strong>Side Clearance:</strong> {report.sideClearanceFt} ft</p>
+      <p><strong>ADU Permitted:</strong> {report.allowed ? "Yes" : "No"}</p>
+      <p><strong>Reason:</strong> {report.reason}</p>
+      <p><strong>Max ADU Size:</strong> {report.maxADUFt2.toLocaleString()} ft²</p>
       <p style={{ marginTop: "1rem" }}>{report.summary}</p>
     </div>
   );
 };
 
-// 📥 Input
-const AddressInput = ({ value, onChange }) => (
+// 🧾 Input Form
+const AddressInput = ({
+  address, setAddress,
+  lotWidthFt, setLotWidthFt,
+  lotDepthFt, setLotDepthFt,
+  houseWidthFt, setHouseWidthFt,
+  houseDepthFt, setHouseDepthFt
+}) => (
   <div>
-    <label htmlFor="address">Enter Property Address</label>
-    <input
-      id="address"
-      type="text"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      placeholder="123 Main St, Hamilton, ON"
-      style={{ width: "100%", padding: "8px", marginTop: "4px" }}
-    />
+    <label>Property Address</label>
+    <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="123 Main St, Hamilton" style={{ width: "100%", marginBottom: "10px" }} />
+    <label>Lot Width (ft)</label>
+    <input type="number" value={lotWidthFt} onChange={(e) => setLotWidthFt(Number(e.target.value))} placeholder="e.g. 30" style={{ width: "100%", marginBottom: "10px" }} />
+    <label>Lot Depth (ft)</label>
+    <input type="number" value={lotDepthFt} onChange={(e) => setLotDepthFt(Number(e.target.value))} placeholder="e.g. 100" style={{ width: "100%", marginBottom: "10px" }} />
+    <label>House Width (ft)</label>
+    <input type="number" value={houseWidthFt} onChange={(e) => setHouseWidthFt(Number(e.target.value))} placeholder="e.g. 25" style={{ width: "100%", marginBottom: "10px" }} />
+    <label>House Depth (ft)</label>
+    <input type="number" value={houseDepthFt} onChange={(e) => setHouseDepthFt(Number(e.target.value))} placeholder="e.g. 40" style={{ width: "100%", marginBottom: "10px" }} />
   </div>
 );
 
-// 🚀 App
+// 🚀 Main App
 const App = () => {
-  const [inputAddress, setInputAddress] = useState("");
+  const [address, setAddress] = useState("");
+  const [lotWidthFt, setLotWidthFt] = useState("");
+  const [lotDepthFt, setLotDepthFt] = useState("");
+  const [houseWidthFt, setHouseWidthFt] = useState("");
+  const [houseDepthFt, setHouseDepthFt] = useState("");
   const [report, setReport] = useState(null);
 
-  const handleRun = async () => {
-    try {
-      const result = await generateFeasibilityReport(inputAddress || "123 Main St, Hamilton");
-      setReport(result);
-    } catch (err) {
-      alert("Could not locate that address. Try another.");
+  const handleRun = () => {
+    if (!lotWidthFt || !lotDepthFt || !houseWidthFt || !houseDepthFt) {
+      alert("Please enter all dimensions.");
+      return;
     }
+
+    const result = checkADUFeasibility({
+      lotWidthFt: Number(lotWidthFt),
+      lotDepthFt: Number(lotDepthFt),
+      houseWidthFt: Number(houseWidthFt),
+      houseDepthFt: Number(houseDepthFt),
+    });
+
+    setReport({
+      address: address || "N/A",
+      ...result,
+      summary: `Feasibility analysis complete for ${address || "this property"}.`,
+    });
   };
 
   return (
-    <div style={{ padding: "1rem", fontFamily: "sans-serif", maxWidth: "600px", margin: "auto" }}>
-      <h1>LEVYR ADU Feasibility Test</h1>
-      <AddressInput value={inputAddress} onChange={setInputAddress} />
+    <div style={{ padding: "1rem", maxWidth: "600px", margin: "auto", fontFamily: "sans-serif" }}>
+      <h1>LEVYR ADU Feasibility (Imperial In / Metric Logic)</h1>
+      <AddressInput
+        address={address} setAddress={setAddress}
+        lotWidthFt={lotWidthFt} setLotWidthFt={setLotWidthFt}
+        lotDepthFt={lotDepthFt} setLotDepthFt={setLotDepthFt}
+        houseWidthFt={houseWidthFt} setHouseWidthFt={setHouseWidthFt}
+        houseDepthFt={houseDepthFt} setHouseDepthFt={setHouseDepthFt}
+      />
       <button onClick={handleRun} style={{ marginTop: "1rem", padding: "0.5rem 1rem" }}>
         Run Feasibility Test
       </button>
